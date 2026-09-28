@@ -1,0 +1,17 @@
+[project]
+name = "whisperapp"
+version = "0.1.0"
+description = "API de transcripción de audio con faster-whisper"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.136.1",
+    "faster-whisper>=1.2.1",
+    "python-multipart>=0.0.27",
+    "uvicorn[standard]>=0.46.0",
+]
+
+[project.scripts]
+start = "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
+
+[tool.uv]
+package = false
