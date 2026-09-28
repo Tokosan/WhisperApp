@@ -1,199 +1,218 @@
-import { useEffect, useRef, useState } from "react"
-import { fetchModels, transcribeStream } from "./api"
-import type { MetaPayload, ModelInfo, SegmentPayload } from "./api"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { BASE_URL, DEFAULT_MODEL, fetchHealth, fetchModels, transcribeStream } from "./api"
+import type { HealthInfo, MetaPayload, ModelInfo, SegmentPayload } from "./api"
 import DropZone from "./components/DropZone"
+import Header from "./components/Header"
+import { AlertIcon } from "./components/Icons"
+import ProgressPanel from "./components/ProgressPanel"
+import type { Phase, Timings } from "./components/ProgressPanel"
+import Settings from "./components/Settings"
 import TranscriptionView from "./components/TranscriptionView"
-import "./index.css"
 
-type Status = "idle" | "uploading" | "transcribing" | "done" | "error"
-
-const LANGUAGE_OPTIONS = [
-  { value: "", label: "Detectar automáticamente" },
-  { value: "es", label: "Español" },
-  { value: "en", label: "English" },
-  { value: "pt", label: "Português" },
-  { value: "fr", label: "Français" },
-  { value: "de", label: "Deutsch" },
-  { value: "it", label: "Italiano" },
-  { value: "zh", label: "中文" },
-  { value: "ja", label: "日本語" },
-  { value: "ko", label: "한국어" },
-]
+function useNow(active: boolean, interval = 500) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setNow(Date.now()), interval)
+    return () => clearInterval(id)
+  }, [active, interval])
+  return now
+}
 
 export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([])
-  const [selectedModel, setSelectedModel] = useState("large-v3-turbo")
-  const [selectedLang, setSelectedLang] = useState("")
-  const [status, setStatus] = useState<Status>("idle")
-  const [error, setError] = useState("")
+  const [health, setHealth] = useState<HealthInfo | null>(null)
+  const [serverDown, setServerDown] = useState(false)
+  const [model, setModel] = useState(DEFAULT_MODEL)
+  const [language, setLanguage] = useState("")
+
+  const [phase, setPhase] = useState<Phase>("idle")
+  const [file, setFile] = useState<File | null>(null)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [upload, setUpload] = useState(0)
   const [meta, setMeta] = useState<MetaPayload | null>(null)
   const [segments, setSegments] = useState<SegmentPayload[]>([])
-  const [fileName, setFileName] = useState("")
+  const [timings, setTimings] = useState<Timings | null>(null)
+  const [modelWasLoaded, setModelWasLoaded] = useState(true)
+  const [cancelled, setCancelled] = useState(false)
+  const [error, setError] = useState("")
   const abortRef = useRef<AbortController | null>(null)
 
-  useEffect(() => {
-    fetchModels()
-      .then(setModels)
-      .catch(() => {})
+  const active = phase === "uploading" || phase === "preparing" || phase === "transcribing"
+  const now = useNow(active)
+
+  const refreshHealth = useCallback(() => {
+    Promise.all([fetchHealth(), fetchModels()]).then(
+      ([h, m]) => {
+        setHealth(h)
+        setModels(m)
+        setServerDown(false)
+      },
+      () => setServerDown(true),
+    )
   }, [])
 
-  async function handleFile(file: File) {
-    abortRef.current?.abort()
-    abortRef.current = new AbortController()
+  useEffect(refreshHealth, [refreshHealth])
 
-    setFileName(file.name)
+  // Progreso en el título de la pestaña, útil si el usuario cambia de pestaña
+  useEffect(() => {
+    const duration = meta?.duration ?? 0
+    const processed = segments.at(-1)?.end ?? 0
+    if (phase === "uploading") document.title = `↑ ${Math.floor(upload * 100)}% · WhisperApp`
+    else if (phase === "preparing") document.title = "Preparando… · WhisperApp"
+    else if (phase === "transcribing") document.title = `${duration ? Math.floor((processed / duration) * 100) : 0}% · WhisperApp`
+    else if (phase === "done") document.title = "✓ Listo · WhisperApp"
+    else if (phase === "error") document.title = "Error · WhisperApp"
+    else document.title = "WhisperApp"
+  }, [phase, upload, meta, segments])
+
+  useEffect(() => {
+    if (!active) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [active])
+
+  async function start(f: File) {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    if (audioUrl) URL.revokeObjectURL(audioUrl)
+    setFile(f)
+    setAudioUrl(URL.createObjectURL(f))
     setMeta(null)
     setSegments([])
+    setUpload(0)
     setError("")
-    setStatus("uploading")
+    setCancelled(false)
+    setModelWasLoaded(health?.loaded_model === model)
+    setTimings({ start: Date.now() })
+    setPhase("uploading")
 
     try {
-      setStatus("transcribing")
       await transcribeStream({
-        file,
-        model: selectedModel,
-        language: selectedLang,
-        onMeta: (m) => setMeta(m),
+        file: f,
+        model,
+        language,
+        signal: controller.signal,
+        onUploadProgress: (loaded, total) => setUpload(loaded / total),
+        onUploaded: () => {
+          setUpload(1)
+          setPhase("preparing")
+          setTimings((t) => t && { ...t, uploaded: Date.now() })
+        },
+        onMeta: (m) => {
+          setMeta(m)
+          setPhase("transcribing")
+          setTimings((t) => t && { ...t, meta: Date.now() })
+        },
         onSegment: (s) => setSegments((prev) => [...prev, s]),
-        onDone: () => setStatus("done"),
-        onError: (e) => { setError(e.message); setStatus("error") },
-        signal: abortRef.current.signal,
       })
-      setStatus("done")
-    } catch (e: unknown) {
-      if (e instanceof Error && e.name === "AbortError") return
+      setTimings((t) => t && { ...t, end: Date.now() })
+      setPhase("done")
+    } catch (e) {
+      if (controller.signal.aborted) return
       setError(e instanceof Error ? e.message : "Error desconocido")
-      setStatus("error")
+      setTimings((t) => t && { ...t, end: Date.now() })
+      setPhase("error")
+    } finally {
+      if (abortRef.current === controller) refreshHealth()
     }
   }
 
-  function handleCancel() {
+  function cancel() {
     abortRef.current?.abort()
-    setStatus("idle")
+    if (segments.length > 0) {
+      setCancelled(true)
+      setTimings((t) => t && { ...t, end: Date.now() })
+      setPhase("done")
+    } else {
+      reset()
+    }
   }
 
-  const isLoading = status === "uploading" || status === "transcribing"
-  const showResult = segments.length > 0 || isLoading
+  function reset() {
+    abortRef.current?.abort()
+    if (audioUrl) URL.revokeObjectURL(audioUrl)
+    setFile(null)
+    setAudioUrl(null)
+    setMeta(null)
+    setSegments([])
+    setTimings(null)
+    setError("")
+    setCancelled(false)
+    setPhase("idle")
+  }
+
+  const idle = phase === "idle" || !file || !timings
 
   return (
-    <div className="min-h-screen bg-[#0f1117] text-slate-100 flex flex-col">
-      <div className={[
-        "max-w-2xl w-full mx-auto px-6 flex flex-col gap-6",
-        showResult ? "py-12" : "flex-1 justify-center py-10",
-      ].join(" ")}>
+    <div className="min-h-screen flex flex-col">
+      <div className="max-w-3xl w-full mx-auto px-4 sm:px-6 flex flex-col flex-1">
+        <Header health={health} serverDown={serverDown} onRetry={refreshHealth} />
 
-        {/* Header */}
-        <header className="text-center">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-violet-600/20 border border-violet-500/30 mb-4">
-            <svg className="w-7 h-7 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-            </svg>
-          </div>
-          <h1 className="text-3xl font-semibold text-slate-100 tracking-tight">WhisperApp</h1>
-          <p className="text-slate-500 mt-1.5 text-sm">Transcripción de audio con faster-whisper</p>
-        </header>
-
-        {/* Opciones */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-slate-500 font-medium uppercase tracking-wide">Modelo</label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              disabled={isLoading}
-              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-violet-500 disabled:opacity-50 cursor-pointer"
-            >
-              {models.length === 0 ? (
-                <option value="large-v3-turbo">large-v3-turbo (recomendado)</option>
-              ) : (
-                models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.id} — {m.description}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-slate-500 font-medium uppercase tracking-wide">Idioma</label>
-            <select
-              value={selectedLang}
-              onChange={(e) => setSelectedLang(e.target.value)}
-              disabled={isLoading}
-              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-violet-500 disabled:opacity-50 cursor-pointer"
-            >
-              {LANGUAGE_OPTIONS.map((l) => (
-                <option key={l.value} value={l.value}>{l.label}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Drop zone o estado de carga */}
-        {!isLoading ? (
-          <DropZone onFile={handleFile} disabled={isLoading} />
-        ) : (
-          <div className="w-full rounded-2xl border border-slate-800 bg-slate-900/60 py-10 px-8 flex flex-col items-center gap-5">
-            <div className="relative w-16 h-16">
-              <div className="absolute inset-0 rounded-full border-2 border-slate-700" />
-              <div className="absolute inset-0 rounded-full border-2 border-t-violet-500 animate-spin" />
-              <div className="absolute inset-[6px] rounded-full bg-violet-600/10 flex items-center justify-center">
-                <svg className="w-5 h-5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-                </svg>
-              </div>
-            </div>
-
-            <div className="text-center">
-              <p className="text-slate-300 font-medium">
-                {status === "uploading" ? "Enviando archivo…" : "Transcribiendo…"}
+        {idle ? (
+          <main className="flex-1 flex flex-col justify-center gap-8 pb-16 pt-6">
+            <div className="text-center fade-up">
+              <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-fg text-balance">
+                Convierte audio en texto
+              </h1>
+              <p className="text-muted mt-3 text-balance">
+                Transcripción local con faster-whisper, con marcas de tiempo y subtítulos listos para descargar.
               </p>
-              <p className="text-slate-600 text-sm mt-1 max-w-xs truncate">{fileName}</p>
             </div>
 
-            <button
-              onClick={handleCancel}
-              className="text-slate-500 hover:text-slate-300 text-sm transition-colors underline underline-offset-2"
-            >
-              Cancelar
-            </button>
-          </div>
+            <div className="flex flex-col gap-5 fade-up" style={{ animationDelay: "60ms" }}>
+              {serverDown && (
+                <div className="flex items-start gap-3 bg-danger-soft rounded-xl px-4 py-3 text-sm">
+                  <AlertIcon className="w-5 h-5 text-danger shrink-0" />
+                  <p className="text-muted">
+                    <span className="font-medium text-danger">No hay conexión con el servidor.</span>{" "}
+                    Revisa que el backend esté corriendo en <span className="font-mono text-fg">{BASE_URL}</span>.
+                  </p>
+                </div>
+              )}
+              <Settings
+                models={models}
+                model={model}
+                language={language}
+                loadedModel={health?.loaded_model ?? null}
+                onModel={setModel}
+                onLanguage={setLanguage}
+              />
+              <DropZone onFile={start} />
+            </div>
+          </main>
+        ) : (
+          <main className="flex flex-col gap-4 pt-2 pb-16">
+            <ProgressPanel
+              phase={phase}
+              file={file}
+              model={model}
+              modelWasLoaded={modelWasLoaded}
+              upload={upload}
+              meta={meta}
+              segments={segments}
+              timings={timings}
+              now={now}
+              cancelled={cancelled}
+              error={error}
+              onCancel={cancel}
+              onRetry={() => start(file)}
+              onReset={reset}
+            />
+            {(phase === "transcribing" || segments.length > 0) && (
+              <TranscriptionView
+                segments={segments}
+                loading={phase === "transcribing"}
+                fileName={file.name}
+                audioUrl={audioUrl}
+                duration={meta?.duration ?? 0}
+              />
+            )}
+          </main>
         )}
-
-        {/* Error */}
-        {status === "error" && (
-          <div className="flex items-start gap-3 bg-red-950/40 border border-red-800/50 rounded-xl px-4 py-3 text-sm text-red-300">
-            <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-            </svg>
-            {error}
-          </div>
-        )}
-
-        {/* Vista de transcripción */}
-        {showResult && (
-          <TranscriptionView
-            meta={meta}
-            segments={segments}
-            loading={isLoading}
-            fileName={fileName}
-          />
-        )}
-
-        {/* Botón nueva transcripción */}
-        {status === "done" && (
-          <button
-            onClick={() => { setStatus("idle"); setSegments([]); setMeta(null); setFileName("") }}
-            className="self-center flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-sm font-medium transition-all"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-            </svg>
-            Transcribir otro archivo
-          </button>
-        )}
-
       </div>
     </div>
   )

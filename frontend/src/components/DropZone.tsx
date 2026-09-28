@@ -1,73 +1,94 @@
 import { useRef, useState } from "react"
+import { UploadIcon } from "./Icons"
 
 interface Props {
   onFile: (file: File) => void
-  disabled: boolean
 }
 
-const ACCEPTED = ".mp3,.mp4,.wav,.m4a,.ogg,.flac,.webm,.mkv"
+const EXTENSIONS = ["mp3", "mp4", "wav", "m4a", "ogg", "flac", "webm", "mkv", "avi"]
+const ACCEPT = EXTENSIONS.map((e) => `.${e}`).join(",")
 
-export default function DropZone({ onFile, disabled }: Props) {
+export default function DropZone({ onFile }: Props) {
   const [dragging, setDragging] = useState(false)
+  const [rejected, setRejected] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
 
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault()
-    setDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) onFile(file)
-  }
-
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (file) onFile(file)
-    e.target.value = ""
+  function accept(file: File | undefined) {
+    if (!file) return
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? ""
+    if (!EXTENSIONS.includes(ext)) {
+      setRejected(`«${file.name}» no es un formato soportado`)
+      return
+    }
+    setRejected("")
+    onFile(file)
   }
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => inputRef.current?.click()}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
-      className={[
-        "w-full rounded-2xl border-2 border-dashed transition-all duration-200 cursor-pointer",
-        "flex flex-col items-center justify-center gap-4 py-16 px-8",
-        "focus:outline-none",
-        disabled
-          ? "opacity-40 cursor-not-allowed border-slate-700 bg-slate-900"
-          : dragging
-          ? "border-violet-400 bg-violet-950/30 scale-[1.01]"
-          : "border-slate-600 bg-slate-900/60 hover:border-violet-500 hover:bg-violet-950/20",
-      ].join(" ")}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPTED}
-        className="hidden"
-        onChange={handleChange}
-        disabled={disabled}
-      />
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragging(false)
+          accept(e.dataTransfer.files[0])
+        }}
+        className={[
+          "group relative w-full rounded-2xl border border-dashed transition-all duration-200 cursor-pointer",
+          "flex flex-col items-center justify-center gap-5 py-14 px-6",
+          dragging
+            ? "border-accent bg-accent-soft scale-[1.01]"
+            : "border-line-strong bg-surface hover:border-accent hover:bg-accent-soft/50",
+        ].join(" ")}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept={ACCEPT}
+          className="hidden"
+          onChange={(e) => {
+            accept(e.target.files?.[0])
+            e.target.value = ""
+          }}
+        />
 
-      <div className={[
-        "w-16 h-16 rounded-full flex items-center justify-center transition-colors",
-        dragging ? "bg-violet-500/30" : "bg-slate-800",
-      ].join(" ")}>
-        <svg className="w-8 h-8 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-        </svg>
-      </div>
+        <div
+          className={[
+            "w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200",
+            dragging
+              ? "bg-accent text-on-accent -translate-y-1"
+              : "bg-surface-2 text-accent-fg group-hover:bg-accent group-hover:text-on-accent group-hover:-translate-y-0.5",
+          ].join(" ")}
+        >
+          <UploadIcon className="w-6 h-6" />
+        </div>
 
-      <div className="text-center">
-        <p className="text-slate-200 text-lg font-medium">
-          {dragging ? "Suelta el archivo aquí" : "Arrastra un archivo de audio"}
+        <div className="text-center">
+          <p className="text-fg text-base font-medium">
+            {dragging ? "Suelta para empezar a transcribir" : "Arrastra un archivo de audio o video"}
+          </p>
+          <p className="text-muted text-sm mt-1">
+            o <span className="text-accent-fg font-medium underline underline-offset-4 decoration-accent/40">elige uno desde tu equipo</span>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {EXTENSIONS.map((ext) => (
+            <span key={ext} className="font-mono text-[11px] uppercase text-faint border border-line rounded-md px-1.5 py-0.5">
+              {ext}
+            </span>
+          ))}
+        </div>
+      </button>
+
+      {rejected && (
+        <p role="alert" className="text-sm text-danger text-center fade-up">
+          {rejected}. Usa uno de los formatos de la lista.
         </p>
-        <p className="text-slate-500 text-sm mt-1">o haz clic para seleccionar</p>
-        <p className="text-slate-600 text-xs mt-3">MP3 · MP4 · WAV · M4A · OGG · FLAC · WEBM</p>
-      </div>
-    </button>
+      )}
+    </div>
   )
 }

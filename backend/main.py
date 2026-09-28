@@ -132,7 +132,10 @@ async def transcribe_stream(
         tmp.write(await file.read())
         tmp_path = tmp.name
 
-    async def event_stream():
+    def event_stream():
+        # Generador síncrono: Starlette lo itera en un threadpool, así el trabajo
+        # bloqueante de Whisper no congela el event loop y cada evento se envía
+        # apenas se produce.
         try:
             segments_gen, info = get_transcriber().transcribe(
                 tmp_path,
@@ -154,6 +157,9 @@ async def transcribe_stream(
                 yield f"event: segment\ndata: {json.dumps(payload)}\n\n"
 
             yield "event: done\ndata: {}\n\n"
+        except Exception as e:
+            logger.exception("Error durante la transcripción por streaming")
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
         finally:
             os.unlink(tmp_path)
 

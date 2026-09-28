@@ -1,29 +1,21 @@
 import { useEffect, useRef, useState } from "react"
-import type { MetaPayload, SegmentPayload } from "../api"
+import type { SegmentPayload } from "../api"
+import { countWords, formatTime, toSrt, toVtt } from "../format"
+import { CheckIcon, CopyIcon, DownloadIcon, PauseIcon, PlayIcon } from "./Icons"
+import Timeline from "./Timeline"
 
 interface Props {
-  meta: MetaPayload | null
   segments: SegmentPayload[]
   loading: boolean
   fileName: string
+  audioUrl: string | null
+  duration: number
 }
 
-function formatTime(s: number) {
-  const m = Math.floor(s / 60)
-  const sec = Math.floor(s % 60)
-  return `${m}:${sec.toString().padStart(2, "0")}`
-}
+const RATES = [1, 1.25, 1.5, 2]
 
-function formatSrtTime(s: number) {
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = Math.floor(s % 60)
-  const ms = Math.round((s % 1) * 1000)
-  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")},${ms.toString().padStart(3, "0")}`
-}
-
-function triggerDownload(content: string, name: string, mime: string) {
-  const blob = new Blob([content], { type: mime })
+function triggerDownload(content: string, name: string) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" })
   const url = URL.createObjectURL(blob)
   const a = document.createElement("a")
   a.href = url
@@ -32,16 +24,55 @@ function triggerDownload(content: string, name: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function TranscriptionView({ meta, segments, loading, fileName }: Props) {
-  const bottomRef = useRef<HTMLDivElement>(null)
+export default function TranscriptionView({ segments, loading, fileName, audioUrl, duration }: Props) {
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
   const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [segments.length])
+  const [view, setView] = useState<"segments" | "text">("segments")
+  const [playing, setPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [rate, setRate] = useState(1)
+  const [playable, setPlayable] = useState(true)
 
   const fullText = segments.map((s) => s.text).join(" ")
   const baseName = fileName.replace(/\.[^.]+$/, "") || "transcripcion"
+  const active = segments.find((s) => currentTime >= s.start && currentTime < s.end) ?? null
+  const activeId = active?.id ?? null
+
+  // Mientras llegan segmentos, seguir el final solo si el usuario no subió a leer
+  useEffect(() => {
+    const el = listRef.current
+    if (loading && el && stickToBottom.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+  }, [segments.length, loading])
+
+  // Durante la reproducción, mantener visible el segmento activo
+  useEffect(() => {
+    if (!playing || activeId === null) return
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-seg="${activeId}"]`)
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+  }, [activeId, playing])
+
+  function seek(time: number, play = false) {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = time
+    setCurrentTime(time)
+    if (play) audio.play()
+  }
+
+  function togglePlay() {
+    const audio = audioRef.current
+    if (!audio) return
+    if (audio.paused) audio.play()
+    else audio.pause()
+  }
+
+  function cycleRate() {
+    const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length]
+    setRate(next)
+    if (audioRef.current) audioRef.current.playbackRate = next
+  }
 
   function copyText() {
     navigator.clipboard.writeText(fullText)
@@ -49,131 +80,169 @@ export default function TranscriptionView({ meta, segments, loading, fileName }:
     setTimeout(() => setCopied(false), 2000)
   }
 
-  function downloadTxt() {
-    triggerDownload(fullText, `${baseName}.txt`, "text/plain;charset=utf-8")
-  }
-
-  function downloadSrt() {
-    const srt = segments
-      .map((seg, i) =>
-        `${i + 1}\n${formatSrtTime(seg.start)} --> ${formatSrtTime(seg.end)}\n${seg.text.trim()}`
-      )
-      .join("\n\n")
-    triggerDownload(srt, `${baseName}.srt`, "text/plain;charset=utf-8")
-  }
+  const showPlayer = audioUrl && playable && duration > 0
+  const tabClass = (on: boolean) =>
+    ["px-3 py-1 rounded-md text-xs font-medium transition-colors", on ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg"].join(" ")
+  const actionClass =
+    "flex items-center gap-1.5 text-xs font-medium text-muted hover:text-fg hover:bg-surface-2 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-40 disabled:pointer-events-none"
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Barra de estado / metadata */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          {fileName && (
-            <span className="text-slate-400 text-sm flex items-center gap-1.5">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 1 1-.99-3.467l2.31-.66a2.25 2.25 0 0 0 1.632-2.163Zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 0 1-1.632 2.163l-1.32.377a1.803 1.803 0 0 1-.99-3.467l2.31-.66A2.25 2.25 0 0 0 9 15.553Z" />
-              </svg>
-              {fileName}
-            </span>
-          )}
-          {meta && (
-            <>
-              <span className="bg-violet-900/40 border border-violet-700/50 text-violet-300 text-xs px-2.5 py-1 rounded-full font-medium uppercase tracking-wide">
-                {meta.language} · {Math.round(meta.language_probability * 100)}%
-              </span>
-              <span className="text-slate-500 text-xs">{formatTime(meta.duration)}</span>
-            </>
-          )}
-          {loading && (
-            <span className="flex items-center gap-1.5 text-violet-400 text-xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-              Transcribiendo…
-            </span>
-          )}
+    <section className="bg-surface border border-line rounded-2xl overflow-hidden fade-up">
+      {/* Barra de herramientas */}
+      <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3 border-b border-line">
+        <div className="flex items-center gap-3">
+          <div className="flex bg-surface-2 rounded-lg p-0.5">
+            <button className={tabClass(view === "segments")} onClick={() => setView("segments")}>Segmentos</button>
+            <button className={tabClass(view === "text")} onClick={() => setView("text")}>Texto</button>
+          </div>
+          <span className="text-xs text-faint tabular-nums hidden sm:inline">
+            {countWords(fullText).toLocaleString("es")} palabras
+          </span>
         </div>
 
-        {fullText && !loading && (
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-0.5">
+          <button onClick={copyText} disabled={!fullText} className={[actionClass, copied ? "!text-ok" : ""].join(" ")}>
+            {copied ? <CheckIcon className="w-3.5 h-3.5" /> : <CopyIcon className="w-3.5 h-3.5" />}
+            {copied ? "Copiado" : "Copiar"}
+          </button>
+          <span className="w-px h-4 bg-line mx-1" />
+          <DownloadIcon className="w-3.5 h-3.5 text-faint mx-1" />
+          {[
+            { ext: "txt", make: () => fullText },
+            { ext: "srt", make: () => toSrt(segments) },
+            { ext: "vtt", make: () => toVtt(segments) },
+          ].map(({ ext, make }) => (
             <button
-              onClick={copyText}
-              className={[
-                "flex items-center gap-1.5 text-sm transition-all px-3 py-1.5 rounded-lg border",
-                copied
-                  ? "text-emerald-400 border-emerald-700/50 bg-emerald-950/30"
-                  : "text-slate-400 hover:text-slate-200 border-transparent hover:border-slate-700 hover:bg-slate-800/50",
-              ].join(" ")}
+              key={ext}
+              disabled={!fullText || loading}
+              onClick={() => triggerDownload(make(), `${baseName}.${ext}`)}
+              title={loading ? "Disponible al terminar" : `Descargar .${ext}`}
+              className={[actionClass, "font-mono uppercase"].join(" ")}
             >
-              {copied ? (
-                <>
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                  </svg>
-                  ¡Copiado!
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
-                  </svg>
-                  Copiar todo
-                </>
-              )}
+              {ext}
             </button>
+          ))}
+        </div>
+      </div>
 
-            <button
-              onClick={downloadTxt}
-              title="Descargar como texto plano (.txt)"
-              className="flex items-center gap-1.5 text-sm transition-all px-3 py-1.5 rounded-lg border text-slate-400 hover:text-slate-200 border-transparent hover:border-slate-700 hover:bg-slate-800/50"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
-              </svg>
-              .txt
-            </button>
+      {/* Reproductor */}
+      {audioUrl && (
+        <audio
+          ref={audioRef}
+          src={audioUrl}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onError={() => setPlayable(false)}
+          className="hidden"
+        />
+      )}
+      {showPlayer && (
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-line bg-surface-2/40">
+          <button
+            onClick={togglePlay}
+            aria-label={playing ? "Pausar" : "Reproducir"}
+            className="w-9 h-9 rounded-full bg-fg text-bg flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-transform"
+          >
+            {playing ? <PauseIcon className="w-4 h-4" /> : <PlayIcon className="w-4 h-4 ml-0.5" />}
+          </button>
+          <span className="font-mono text-xs text-muted tabular-nums w-11 text-right shrink-0">{formatTime(currentTime)}</span>
+          <div className="flex-1 min-w-0">
+            <Timeline
+              duration={duration}
+              segments={segments}
+              playhead={currentTime}
+              activeId={activeId}
+              onSeek={(t) => seek(t)}
+              height="sm"
+            />
+          </div>
+          <span className="font-mono text-xs text-faint tabular-nums w-11 shrink-0">{formatTime(duration)}</span>
+          <button
+            onClick={cycleRate}
+            className="font-mono text-xs font-medium text-muted hover:text-fg border border-line rounded-md w-11 py-1 shrink-0 transition-colors"
+            aria-label="Velocidad de reproducción"
+          >
+            {rate}×
+          </button>
+        </div>
+      )}
 
-            <button
-              onClick={downloadSrt}
-              title="Descargar como subtítulos (.srt)"
-              className="flex items-center gap-1.5 text-sm transition-all px-3 py-1.5 rounded-lg border text-slate-400 hover:text-slate-200 border-transparent hover:border-slate-700 hover:bg-slate-800/50"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
-              </svg>
-              .srt
-            </button>
+      {/* Contenido */}
+      <div
+        ref={listRef}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+        }}
+        className="max-h-[34rem] min-h-40 overflow-y-auto px-2 py-3"
+      >
+        {segments.length === 0 && (
+          <div className="flex flex-col items-center justify-center gap-3 py-12 text-faint">
+            <div className="flex items-center gap-1 h-6">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <span key={i} className="w-1 h-full rounded-full bg-accent/50 bar-dance" style={{ animationDelay: `${i * 120}ms` }} />
+              ))}
+            </div>
+            <p className="text-sm">Los primeros segmentos aparecerán aquí</p>
+          </div>
+        )}
+
+        {view === "segments" ? (
+          <div className="flex flex-col">
+            {segments.map((seg) => {
+              const isActive = activeId === seg.id
+              return (
+                <button
+                  key={seg.id}
+                  data-seg={seg.id}
+                  onClick={() => showPlayer && seek(seg.start, true)}
+                  className={[
+                    "segment-enter group flex gap-4 text-left rounded-xl px-3 py-2 transition-colors",
+                    showPlayer ? "cursor-pointer hover:bg-surface-2" : "cursor-text",
+                    isActive ? "bg-accent-soft" : "",
+                  ].join(" ")}
+                >
+                  <span
+                    className={[
+                      "font-mono text-xs pt-[3px] shrink-0 w-12 text-right tabular-nums transition-colors",
+                      isActive ? "text-accent-fg" : "text-faint group-hover:text-accent-fg",
+                    ].join(" ")}
+                  >
+                    {formatTime(seg.start)}
+                  </span>
+                  <span className={["text-[15px] leading-relaxed", isActive ? "text-fg" : "text-fg/85"].join(" ")}>
+                    {seg.text}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          segments.length > 0 && (
+            <p className="px-3 py-1 text-[15px] leading-7 text-fg/90 whitespace-pre-wrap">
+              {segments.map((seg) => (
+                <span key={seg.id} className={activeId === seg.id ? "bg-accent-soft text-fg rounded" : ""}>
+                  {seg.text}{" "}
+                </span>
+              ))}
+            </p>
+          )
+        )}
+
+        {loading && segments.length > 0 && (
+          <div className="flex gap-4 px-3 py-2">
+            <span className="w-12 shrink-0" />
+            <div className="flex gap-1 items-center h-6">
+              {[0, 150, 300].map((d) => (
+                <span key={d} className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
+              ))}
+            </div>
           </div>
         )}
       </div>
-
-      {/* Área de segmentos */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 min-h-48 max-h-[32rem] overflow-y-auto">
-        {segments.length === 0 && !loading && (
-          <p className="text-slate-600 text-center text-sm mt-8">Los segmentos aparecerán aquí…</p>
-        )}
-
-        <div className="flex flex-col gap-3">
-          {segments.map((seg) => (
-            <div key={seg.id} className="flex gap-3 group segment-enter">
-              <span className="text-slate-600 text-xs font-mono pt-0.5 shrink-0 w-10 text-right">
-                {formatTime(seg.start)}
-              </span>
-              <p className="text-slate-200 text-sm leading-relaxed">{seg.text}</p>
-            </div>
-          ))}
-
-          {loading && segments.length > 0 && (
-            <div className="flex gap-3">
-              <span className="w-10 shrink-0" />
-              <div className="flex gap-1 items-center pt-1">
-                <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce [animation-delay:0ms]" />
-                <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce [animation-delay:150ms]" />
-                <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce [animation-delay:300ms]" />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div ref={bottomRef} />
-      </div>
-    </div>
+    </section>
   )
 }

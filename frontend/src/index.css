@@ -1,22 +1,122 @@
 @import "tailwindcss";
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+:root {
+  color-scheme: light;
+  --bg: #f5f4f0;
+  --surface: #ffffff;
+  --surface-2: #f0eee8;
+  --line: #e4e1d9;
+  --line-strong: #cdc8bd;
+  --fg: #1b1a18;
+  --muted: #67635b;
+  --faint: #9b968c;
+  --accent: #5a45de;
+  --accent-soft: #ebe8fc;
+  --accent-fg: #4833c7;
+  --on-accent: #ffffff;
+  --ok: #1b8454;
+  --ok-soft: #e1f3ea;
+  --danger: #c23a3a;
+  --danger-soft: #fbe8e8;
+  --glow: rgb(90 69 222 / 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0d0e12;
+    --surface: #15161c;
+    --surface-2: #1c1e26;
+    --line: #262833;
+    --line-strong: #363948;
+    --fg: #ecebf3;
+    --muted: #9c9cae;
+    --faint: #646678;
+    --accent: #8f80ff;
+    --accent-soft: rgb(143 128 255 / 0.13);
+    --accent-fg: #b6acff;
+    --on-accent: #0d0e12;
+    --ok: #42cf8f;
+    --ok-soft: rgb(66 207 143 / 0.12);
+    --danger: #f27474;
+    --danger-soft: rgb(242 116 116 / 0.11);
+    --glow: rgb(143 128 255 / 0.14);
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-on-accent: var(--on-accent);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
 }
 
 body {
-  background: #0f1117;
-  color: #e2e8f0;
-  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  height: 420px;
+  pointer-events: none;
+  background: radial-gradient(60% 100% at 50% 0%, var(--glow), transparent 70%);
+  z-index: -1;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 @keyframes segment-in {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.segment-enter {
-  animation: segment-in 0.25s ease-out;
+@keyframes indeterminate {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+
+@keyframes bar-dance {
+  0%, 100% { transform: scaleY(0.35); }
+  50%      { transform: scaleY(1); }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.segment-enter { animation: segment-in 0.3s ease-out; }
+.fade-up { animation: fade-up 0.35s ease-out both; }
+.indeterminate { animation: indeterminate 1.4s ease-in-out infinite; }
+.bar-dance { animation: bar-dance 1s ease-in-out infinite; transform-origin: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .segment-enter, .fade-up, .indeterminate, .bar-dance { animation: none; }
 }
